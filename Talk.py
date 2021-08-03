@@ -13,7 +13,7 @@ CMDS_LIST = '''
     HELP       - Print this info
     SRV <id>   - Select the server with the given ID
     CH <id>    - Select the channel with the given ID
-    FILE <url> - Attaches the given file to the next message (Set <url> to 'clear' to clear
+    FILE <url> - Attaches the given file to the next message (Set <url> to 'clear' to clear)
     MSG <text> - Sends a message containing <text> into the selected channel
     LS <res>   - Lists all entries of type <res>
      ├─ LS         - Lists all servers if no server is selected, otherwise lists channels
