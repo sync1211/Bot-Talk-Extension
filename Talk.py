@@ -13,8 +13,9 @@ CMDS_LIST = '''
     HELP       - Print this info
     SRV <id>   - Select the server with the given ID
     CH <id>    - Select the channel with the given ID
-    FILE <url> - Attaches the given file to the next message (Set <url> to 'clear' to clear)
+    FILE <url> - Attaches the given file to the next message (Set <url> to 'clear' to clear
     MSG <text> - Sends a message containing <text> into the selected channel
+    SEND_EMBED - Sends an embed into the channel (interactive)
     LS <res>   - Lists all entries of type <res>
      ├─ LS         - Lists all servers if no server is selected, otherwise lists channels
      ├─ LS SRV     - Lists all servers
@@ -70,11 +71,11 @@ class Talk(commands.Cog, name="ThisShouldNotBeShown"):
         await self.bot.wait_until_ready()
 
         #Server and channel
-        cur_guild = None
-        cur_channel = None
+        self.current_guild = None
+        self.current_channel = None
 
         #Attach something to the next message
-        msg_attachment = None
+        self.current_attachment = None
 
         #Console Input Loop
         LOGGER.info("Console activated! Enter 'HELP' for a list of commands!")
@@ -83,151 +84,208 @@ class Talk(commands.Cog, name="ThisShouldNotBeShown"):
             loc_str = []
 
             #Server
-            if cur_guild is not None:
-                loc_str.append(f"SRV: {getattr(cur_guild, 'name', cur_guild)}")
+            if self.current_guild is not None:
+                loc_str.append(f"SRV: {getattr(self.current_guild, 'name', self.current_guild)}")
 
             #Channel
-            if cur_channel is not None:
-                loc_str.append(f"CH: {getattr(cur_channel, 'name', cur_channel)}")
+            if self.current_channel is not None:
+                loc_str.append(f"CH: {getattr(self.current_channel, 'name', self.current_channel)}")
 
             #Attachment
-            if msg_attachment is not None:
-                loc_str.append(f"ATT: {msg_attachment.filename}")
+            if self.current_attachment is not None:
+                loc_str.append(f"ATT: {self.current_attachment.filename}")
 
             loc_str = "; ".join(loc_str)
 
             #Read input (async)
             try:
-                in_str = await ainput(loc_str+"> ")
+                in_str = await ainput(f"{loc_str}> ")
             except EOFError: #CTRL + D -> Exit
                 in_str = "exit"
 
-            in_str = in_str.rstrip(" ")
-            in_str_lower = in_str.lower()
+            if await self.eval_user_command(in_str):
+                LOGGER.info("Prompt closed!")
+                break
 
-            #Process input and commands
-            try:
-                #Print a list of commands
-                if in_str_lower == "help":
-                    LOGGER.info("List of commands: %s", CMDS_LIST)
 
-                #Select server
-                elif in_str_lower.startswith("srv"):
-                    guild_id = int(in_str[4:])
+    async def eval_user_command(self, command_str: str) -> bool:
+        command_str = command_str.rstrip(" ")
+        in_str_lower = command_str.lower()
 
-                    tmp_guild = self.bot.get_guild(guild_id)
+        # Process input and commands
+        try:
+            # Print a list of commands
+            if in_str_lower == "help":
+                LOGGER.info("List of commands: %s", CMDS_LIST)
+                return
 
-                    if tmp_guild is None:
-                        LOGGER.error("Server not found!")
+            # Select server
+            if in_str_lower.startswith("srv"):
+                guild_id = int(command_str[4:])
+
+                tmp_guild = self.bot.get_guild(guild_id)
+
+                if tmp_guild is None:
+                    LOGGER.error("Server not found!")
+                    return
+
+                self.current_guild = tmp_guild
+                LOGGER.info("Server set to %s!", self.current_guild.name)
+                return
+
+            # Select channel
+            if in_str_lower.startswith("ch"):
+                channel_id = int(command_str[3:])
+
+                #Get channel by global search
+                if self.current_guild is None:
+                    LOGGER.info("Fetching channel...")
+                    tmp_channel = await self.bot.fetch_channel(channel_id)
+
+                    if not isinstance(tmp_channel, discord.TextChannel):
+                        #NOTE: excluding DM channels to prevent malicious use!
+                        LOGGER.error("Channel is not a text channel!")
+                        return
+
+                    self.current_channel = tmp_channel
+                    self.current_guild = self.current_channel.guild
+                    LOGGER.info("Channel set to %s!", self.current_channel.name)
+                    LOGGER.info("Server set to %s!", self.current_guild.name)
+                    return
+
+                # Get channel on the specified server
+                tmp_channel = self.current_guild.get_channel(channel_id)
+
+                if tmp_channel is None:
+                    LOGGER.error("Channel not found on this server!")
+                    return
+
+                self.current_channel = tmp_channel
+                LOGGER.info("Channel set to %s!", self.current_channel.name)
+                return
+
+            # Add attachment to the next msg
+            if in_str_lower.startswith("file"):
+                if in_str_lower == "file clear": #Clear attachment
+                    self.current_attachment = None
+                    LOGGER.info("Attachment removed!")
+                    return
+
+                att_url = command_str[5:]
+
+                #Get file name from URL
+                att_name = att_url.split("/")[-1].split("?")[0]
+
+                self.current_attachment = discord.File(att_url, filename=att_name)
+                LOGGER.info("Added %s as attachment!", att_url)
+                return
+
+
+            # Send embed
+            if (in_str_lower == "send_embed"):
+                if self.current_channel is None:
+                    LOGGER.error("No channel selected!")
+                    return
+
+                embed_message = ""
+                embed_title = ""
+                embed_url = ""
+                embed_description = []
+                LOGGER.info("Please enter embed details:")
+
+                try:
+                    embed_message = await ainput("Mesage (optional): ")
+                    embed_title = await ainput("Title: ")
+                    embed_url = await ainput("Url (optional): ")
+
+                    print("Description:")
+
+                    while True:
+                        print("> ", end="")
+                        embed_description_line = await ainput("")
+                        if embed_description_line == "":
+                            break
+
+                        embed_description.append(embed_description_line)
+
+                except KeyboardInterrupt:
+                    return
+
+                await self.current_channel.send(
+                    embed_message,
+                    embed=discord.Embed(
+                        title=embed_title,
+                        url=embed_url,
+                        description="\n".join(embed_description)
+                    )
+                )
+                LOGGER.info("Embed sent to channel '%s' on '%s'!",self.current_channel.name, self.current_guild.name)
+                return
+
+            # Send message
+            if in_str_lower.startswith("msg"): #Send message
+                if self.current_channel is None:
+                    LOGGER.error("No channel selected!")
+                    return
+                
+                await self.current_channel.send(command_str[4:], file=self.current_attachment)
+                self.current_attachment = None
+                LOGGER.info("Message sent to channel '%s' on '%s'!",self.current_channel.name, self.current_guild.name)
+                return
+
+            # List things
+            if in_str_lower.startswith("ls"):
+                ls_res = in_str_lower[3:]
+
+                #Auto select
+                if ls_res == "":
+                    if self.current_guild is None:
+                        ls_res = "srv"
                     else:
-                        cur_guild = tmp_guild
-                        LOGGER.info("Server set to %s!", cur_guild.name)
+                        ls_res = "ch"
 
-                #Select channel
-                elif in_str_lower.startswith("ch"):
-                    channel_id = int(in_str[3:])
+                #Server
+                if ls_res == "srv":
+                    LOGGER.info("Current guilds: \n%s", prettylist(self.bot.guilds))
+                    return
 
-                    #Get channel by global search
-                    if cur_guild is None:
-                        LOGGER.info("Fetching channel...")
-                        tmp_channel = await self.bot.fetch_channel(channel_id)
+                if ls_res == "ch":
+                    if self.current_guild is None:
+                        LOGGER.error("No server selected!")
+                        return
+                    #Get Channels
+                    guild_channels = self.current_guild.channels or await self.current_guild.fetch_channels()
 
-                        if not isinstance(tmp_channel, discord.TextChannel):
-                            #NOTE: excluding DM channels to prevent malicious use!
-                            LOGGER.error("Channel is not a text channel!")
-                        else:
-                            cur_channel = tmp_channel
-                            cur_guild = cur_channel.guild
-                            LOGGER.info("Channel set to %s!", cur_channel.name)
-                            LOGGER.info("Server set to %s!", cur_guild.name)
-
-                    #Get channel on the specified server
-                    else:
-                        tmp_channel = cur_guild.get_channel(channel_id)
-
-                        if tmp_channel is None:
-                            LOGGER.error("Channel not found on this server!")
-                        else:
-                            cur_channel = tmp_channel
-                            LOGGER.info("Channel set to %s!", cur_channel.name)
-
-                #Add attachment to the next msg
-                elif in_str_lower.startswith("file"):
-                    if in_str_lower == "file clear": #Clear attachment
-                        msg_attachment = None
-                        LOGGER.info("Attachment removed!")
-                    else:
-                        att_url = in_str[5:]
-
-                        #Get file name from URL
-                        att_name = att_url.split("/")[-1].split("?")[0]
-
-                        msg_attachment = discord.File(att_url, filename=att_name)
-                        LOGGER.info("Added %s as attachment!", att_url)
-
-                #Send message
-                elif in_str_lower.startswith("msg"): #Send message
-                    if cur_channel is None:
-                        LOGGER.error("No channel selected!")
-                    else:
-                        await cur_channel.send(in_str[4:], file=msg_attachment)
-                        msg_attachment = None
-                        LOGGER.info("Message sent to channel '%s' on '%s'!",cur_channel.name, cur_guild.name)
-
-                #List stuff
-                elif in_str_lower.startswith("ls"):
-                    ls_res = in_str_lower[3:]
-
-                    #Auto select
-                    if ls_res == "":
-                        if cur_guild is None:
-                            ls_res = "srv"
-                        else:
-                            ls_res = "ch"
-
-                    #Server
-                    if ls_res == "srv":
-                        LOGGER.info("Current guilds: \n%s", prettylist(self.bot.guilds))
-                    elif ls_res == "ch":
-                        if cur_guild is None:
-                            LOGGER.error("No server selected!")
-                        else:
-                            #Get Channels
-                            guild_channels = cur_guild.channels or await cur_guild.fetch_channels()
-
-                            LOGGER.info("Text channels on '%s': \n%s", cur_guild.name, prettylist(
-                                        list(
-                                            filter(
-                                            lambda channel : isinstance(channel, discord.channel.TextChannel),
-                                            guild_channels
-                                        )
-                                    )
+                    LOGGER.info("Text channels on '%s': \n%s", self.current_guild.name, prettylist(
+                                list(
+                                    filter(
+                                    lambda channel : isinstance(channel, discord.channel.TextChannel),
+                                    guild_channels
                                 )
                             )
-                    else:
-                        LOGGER.error("Unknown resource '%s'!", in_str[3:])
+                        )
+                    )
+                    return
 
-                #Quit Sibelius
-                elif in_str_lower == "exit":
-                    #Confirm selection
-                    try:
-                        quit_yn = (await ainput("Exit? [y/N]: ")).lower()
-                    except EOFError:
-                        quit_yn = "y"
+                LOGGER.error("Unknown resource '%s'!", command_str[3:])
+                return
 
-                    #Quit
-                    if quit_yn == "y":
-                        LOGGER.info("Terminal closed!")
-                        break
+            #Quit Sibelius
+            if in_str_lower == "exit":
+                #Confirm selection
+                try:
+                    return ((await ainput("Exit? [y/N]: ")).lower() == "y")
+                except EOFError:
+                    return True
 
-                #Unknown command
-                else:
-                    if in_str != "":
-                        LOGGER.error("Unknown command '%s'!", in_str)
-            except Exception as input_exception:
-                LOGGER.error("Error processing user command!", exc_info=input_exception)
+            #Unknown command
+            if command_str != "":
+                LOGGER.error("Unknown command '%s'!", command_str)
+                return
+        except Exception as input_exception:
+            LOGGER.error("Error processing user command!", exc_info=input_exception)
 
 
-def setup(bot):
+async def setup(bot):
     '''import and run extension'''
-    bot.add_cog(Talk(bot))
+    await bot.add_cog(Talk(bot))
